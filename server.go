@@ -21,6 +21,7 @@ const (
 		"\tQUIT: Closes connection\n"
 	TIMEOUT = 60 * time.Second
 	CLOSING = "Closing\n"
+	OK      = "OK\n"
 
 	GET    = "GET"
 	SET    = "SET"
@@ -39,6 +40,12 @@ type db struct {
 	port   int
 	repo   Repository
 	server net.Listener
+}
+
+type dbServerInstruction struct {
+	operation string
+	key       string
+	value     string
 }
 
 func NewDBServer(port int) DBServer {
@@ -63,7 +70,7 @@ func (db *db) Listen() error {
 	db.server = server
 
 	defer db.server.Close()
-	log.Printf("Listening on port %s\n", db.port)
+	log.Printf("Listening on port %d\n", db.port)
 
 	// go db.acceptConnections()
 	db.acceptConnections()
@@ -88,6 +95,7 @@ func (db *db) acceptConnections() {
 		}
 		c.SetReadDeadline(time.Now().Add(TIMEOUT))
 
+		// Maybe wrap connection in a struct to give it a session ID for better logs?
 		go db.handleConnection(c)
 	}
 }
@@ -97,12 +105,12 @@ func (db *db) handleConnection(c net.Conn) {
 
 	log.Printf("Serving %s\n", c.RemoteAddr().String())
 	scanner := bufio.NewScanner(c)
-	scanner.Split(ScanCRLF)
+	scanner.Split(scanCRLF)
 
 	for scanner.Scan() {
 		data := scanner.Text()
 
-		strData := string(data)
+		strData := strings.TrimSpace(string(data))
 		if strData == QUIT {
 			c.Write([]byte(string(CLOSING)))
 			break
@@ -110,16 +118,18 @@ func (db *db) handleConnection(c net.Conn) {
 			continue
 		}
 
-		command, rest, err := parseCommand(strData)
-		var response string
+		instruction, err := parseInstruction(strData)
 		if err != nil {
-			response = err.Error()
-		} else {
-			response = rest
+			writeMessage(c, err.Error())
+			continue
 		}
 
-		log.Println(command)
-		writeMessage(c, response)
+		result, err := db.executeInstruction(instruction)
+		if err != nil {
+			writeMessage(c, err.Error())
+		}
+
+		writeMessage(c, result)
 	}
 
 	c.Close()
@@ -131,7 +141,31 @@ func writeMessage(c net.Conn, message string) {
 	}
 }
 
-func ScanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
+func (db *db) executeInstruction(instruction *dbServerInstruction) (string, error) {
+	var result string
+	var err error
+
+	log.Printf("operation: %s, key: %s, value: %s\n", instruction.operation, instruction.key, instruction.value)
+
+	switch instruction.operation {
+	case GET:
+		result, err = db.repo.Get(instruction.key)
+	case SET:
+		db.repo.Set(instruction.key, instruction.value)
+		result = OK
+	case DEL:
+		err = db.repo.Delete(instruction.key)
+		if err == nil {
+			result = OK
+		}
+	default:
+		err = fmt.Errorf("Unrecognized operation: %s", instruction.operation)
+	}
+
+	return result, err
+}
+
+func scanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
 	}
@@ -157,11 +191,37 @@ func ScanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	return 0, nil, nil
 }
 
-func parseCommand(input string) (string, string, error) {
-	firstSpace := strings.Index(input, " ")
-	if firstSpace == -1 {
-		return "", "", errors.New("Invalid input. Please specify a command.\n")
+// Need to edit this so that a key can be wrapped in quotes to include a space
+func parseInstruction(input string) (*dbServerInstruction, error) {
+	operation, rest := splitOnFirstSpace(input)
+	if len(operation) == 0 {
+		return nil, errors.New("Invalid input. Please specify an operation.\n")
 	}
 
-	return input[:firstSpace], input[firstSpace+1:], nil
+	key, value := splitOnFirstSpace(rest)
+	if len(key) == 0 {
+		return nil, errors.New("Invalid input. No key was specified.\n")
+	}
+
+	return &dbServerInstruction{
+		operation: operation,
+		key:       key,
+		value:     value,
+	}, nil
+}
+
+func splitOnFirstSpace(input string) (string, string) {
+	firstSpace := strings.Index(input, " ")
+	if firstSpace == -1 {
+		return input, ""
+	}
+
+	var rest string
+	if firstSpace == len(input)-1 {
+		rest = ""
+	} else {
+		rest = input[firstSpace+1:]
+	}
+
+	return input[:firstSpace], rest
 }
