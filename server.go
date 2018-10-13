@@ -55,7 +55,7 @@ func NewDatabaseServer(port int) (DatabaseServer, error) {
 	filename := "./db.db"
 	repo, err := NewDatabase(filename)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to create database: %s", err.Error())
+		return nil, fmt.Errorf("failed to create database: %s", err.Error())
 	}
 
 	return &databaseServer{
@@ -131,7 +131,7 @@ func (serv *databaseServer) handleConnection(c net.Conn) {
 			writeMessage(c, err.Error())
 		}
 
-		writeMessage(c, result)
+		writeMessage(c, result+"\n")
 	}
 
 	c.Close()
@@ -163,7 +163,7 @@ func (serv *databaseServer) executeInstruction(instruction *databaseServerInstru
 			result = OK
 		}
 	default:
-		err = fmt.Errorf("Unrecognized operation: %s", instruction.operation)
+		err = fmt.Errorf("unrecognized operation: %s", instruction.operation)
 	}
 
 	return result, err
@@ -182,7 +182,7 @@ func scanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		advance = i + 1
 
 		if len(data) > i+1 && data[i+1] == '\n' {
-			advance += 1
+			advance++
 		}
 
 		return advance, data[0:i], nil
@@ -199,12 +199,12 @@ func scanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
 func parseInstruction(input string) (*databaseServerInstruction, error) {
 	operation, rest := splitOnFirstSpace(input)
 	if len(operation) == 0 {
-		return nil, errors.New("Invalid input. Please specify an operation.\n")
+		return nil, errors.New("invalid input, no operation specified.\n")
 	}
 
 	key, value := splitOnFirstSpace(rest)
 	if len(key) == 0 {
-		return nil, errors.New("Invalid input. No key was specified.\n")
+		return nil, errors.New("invalid input, no key was specified.\n")
 	}
 
 	return &databaseServerInstruction{

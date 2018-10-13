@@ -39,15 +39,15 @@ func NewDatabase(filename string) (Database, error) {
 
 	fstat, err := os.Stat(t.filename)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to stat file %s: %s", filename, err.Error())
+		return nil, fmt.Errorf("failed to stat file %s: %s", filename, err.Error())
 	}
 
 	size := int(fstat.Size())
 	if size == 0 {
-		size = 256
+		size = 1
 	}
 
-	err = t.mmapFile(size)
+	err = t.mmapFile(1)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func NewDatabase(filename string) (Database, error) {
 func (t *table) openFile() error {
 	file, err := os.OpenFile(t.filename, os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
-		return fmt.Errorf("Failed to open file for database: %s", err.Error())
+		return fmt.Errorf("failed to open file for database: %s", err.Error())
 	}
 
 	t.fd = int(file.Fd())
@@ -78,7 +78,7 @@ func (t *table) mmapFile(size int) error {
 	)
 
 	if err != nil {
-		return fmt.Errorf("Failed to mmap file %s: %s", t.filename, err.Error())
+		return fmt.Errorf("failed to mmap file %s: %s", t.filename, err.Error())
 	}
 
 	t.data = data
@@ -94,7 +94,7 @@ func (t *table) Get(key string) (string, error) {
 	val, ok = t.store[key]
 	t.mut.Unlock()
 	if !ok {
-		return "", fmt.Errorf("No value exists to get for key %s", key)
+		return "", fmt.Errorf("no value exists to get for key %s", key)
 	}
 
 	return val, nil
@@ -115,7 +115,7 @@ func (t *table) Delete(key string) error {
 	t.mut.Lock()
 	if _, ok := t.store[key]; !ok {
 		t.mut.Unlock()
-		return fmt.Errorf("No value exists to delete for key %s", key)
+		return fmt.Errorf("no value exists to delete for key %s", key)
 	}
 
 	delete(t.store, key)
@@ -127,7 +127,7 @@ func (t *table) Delete(key string) error {
 func (t *table) writeToFile() error {
 	data, err := json.Marshal(t.store)
 	if err != nil {
-		return fmt.Errorf("Failed to marshall datastore: %s", err.Error())
+		return fmt.Errorf("failed to marshall datastore: %s", err.Error())
 	}
 
 	size := len(data)
@@ -138,12 +138,12 @@ func (t *table) writeToFile() error {
 
 		err := syscall.Ftruncate(t.fd, int64(size))
 		if err != nil {
-			return fmt.Errorf("Failed to resize file: %s", err.Error())
+			return fmt.Errorf("failed to resize file: %s", err.Error())
 		}
 
 		err = t.mmapFile(size)
 		if err != nil {
-			return fmt.Errorf("Failed to mmap after resize: %s", err.Error())
+			return fmt.Errorf("failed to mmap after resize: %s", err.Error())
 		}
 	}
 
