@@ -31,76 +31,78 @@ const (
 	QUIT   = "QUIT"
 )
 
-type DBServer interface {
+type DatabaseServer interface {
 	Listen() error
 	Close() error
 }
 
-type db struct {
-	port   int
-	repo   Repository
-	server net.Listener
+type databaseServer struct {
+	port     int
+	database Database
+	listener net.Listener
 }
 
-type dbServerInstruction struct {
+type databaseServerInstruction struct {
 	operation string
 	key       string
 	value     string
 }
 
-func NewDBServer(port int) DBServer {
+func NewDatabaseServer(port int) (DatabaseServer, error) {
 	log.Printf("Initializing DB")
 
-	// load from fisk here?
-	repo := NewRepository()
-
-	return &db{
-		port:   port,
-		repo:   repo,
-		server: nil,
+	// TODO make some kinda config struct soon
+	filename := "./db.db"
+	repo, err := NewDatabase(filename)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to create database: %s", err.Error())
 	}
+
+	return &databaseServer{
+		port:     port,
+		database: repo,
+		listener: nil,
+	}, nil
 }
 
-func (db *db) Listen() error {
-	server, err := net.Listen("tcp4", fmt.Sprintf(":%d", db.port))
+func (serv *databaseServer) Listen() error {
+	server, err := net.Listen("tcp4", fmt.Sprintf(":%d", serv.port))
 	if err != nil {
 		return err
 	}
 
-	db.server = server
+	serv.listener = server
 
-	defer db.server.Close()
-	log.Printf("Listening on port %d\n", db.port)
+	defer serv.listener.Close()
+	log.Printf("Listening on port %d\n", serv.port)
 
-	// go db.acceptConnections()
-	db.acceptConnections()
+	serv.acceptConnections()
 
 	return nil
 }
 
-func (db *db) Close() error {
-	if err := db.server.Close(); err != nil {
+func (serv *databaseServer) Close() error {
+	if err := serv.listener.Close(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (db *db) acceptConnections() {
+func (serv *databaseServer) acceptConnections() {
 	for {
-		c, err := db.server.Accept()
+		c, err := serv.listener.Accept()
 		if err != nil {
 			log.Printf("Failed to accept connection: %s", err.Error())
 			return
 		}
 		c.SetReadDeadline(time.Now().Add(TIMEOUT))
 
-		// Maybe wrap connection in a struct to give it a session ID for better logs?
-		go db.handleConnection(c)
+		go serv.handleConnection(c)
 	}
 }
 
-func (db *db) handleConnection(c net.Conn) {
+func (serv *databaseServer) handleConnection(c net.Conn) {
 	writeMessage(c, HELP)
 
 	log.Printf("Serving %s\n", c.RemoteAddr().String())
@@ -124,7 +126,7 @@ func (db *db) handleConnection(c net.Conn) {
 			continue
 		}
 
-		result, err := db.executeInstruction(instruction)
+		result, err := serv.executeInstruction(instruction)
 		if err != nil {
 			writeMessage(c, err.Error())
 		}
@@ -141,20 +143,22 @@ func writeMessage(c net.Conn, message string) {
 	}
 }
 
-func (db *db) executeInstruction(instruction *dbServerInstruction) (string, error) {
+func (serv *databaseServer) executeInstruction(instruction *databaseServerInstruction) (string, error) {
 	var result string
 	var err error
 
 	log.Printf("operation: %s, key: %s, value: %s\n", instruction.operation, instruction.key, instruction.value)
 
-	switch instruction.operation {
+	switch strings.ToUpper(instruction.operation) {
 	case GET:
-		result, err = db.repo.Get(instruction.key)
+		result, err = serv.database.Get(instruction.key)
 	case SET:
-		db.repo.Set(instruction.key, instruction.value)
-		result = OK
+		err = serv.database.Set(instruction.key, instruction.value)
+		if err == nil {
+			result = OK
+		}
 	case DEL:
-		err = db.repo.Delete(instruction.key)
+		err = serv.database.Delete(instruction.key)
 		if err == nil {
 			result = OK
 		}
@@ -192,7 +196,7 @@ func scanCRLF(data []byte, atEOF bool) (advance int, token []byte, err error) {
 }
 
 // Need to edit this so that a key can be wrapped in quotes to include a space
-func parseInstruction(input string) (*dbServerInstruction, error) {
+func parseInstruction(input string) (*databaseServerInstruction, error) {
 	operation, rest := splitOnFirstSpace(input)
 	if len(operation) == 0 {
 		return nil, errors.New("Invalid input. Please specify an operation.\n")
@@ -203,7 +207,7 @@ func parseInstruction(input string) (*dbServerInstruction, error) {
 		return nil, errors.New("Invalid input. No key was specified.\n")
 	}
 
-	return &dbServerInstruction{
+	return &databaseServerInstruction{
 		operation: operation,
 		key:       key,
 		value:     value,

@@ -22,8 +22,13 @@ func main() {
 		port = converted
 	}
 
-	dbServer := NewDBServer(port)
-	err := dbServer.Listen()
+	dbServer, err := NewDatabaseServer(port)
+	if err != nil {
+		log.Printf("There was an error creating the database: %s", err.Error())
+		return
+	}
+
+	err = dbServer.Listen()
 	if err != nil {
 		log.Printf("Failed to start server: %s", err.Error())
 		return
