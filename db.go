@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"syscall"
@@ -13,12 +12,14 @@ type Database interface {
 	Get(string) (string, error)
 	Set(string, string) error
 	Delete(string) error
+	Close() error
 }
 
 type table struct {
 	store map[string]string
 	mut   *sync.Mutex
 
+	pageSize int
 	filename string
 	fd       int
 	file     *os.File
@@ -27,9 +28,11 @@ type table struct {
 
 func NewDatabase(filename string) (Database, error) {
 	t := &table{
-		store:    make(map[string]string),
-		mut:      &sync.Mutex{},
+		store: make(map[string]string),
+		mut:   &sync.Mutex{},
+
 		filename: filename,
+		pageSize: os.Getpagesize(),
 	}
 
 	err := t.openFile()
@@ -37,19 +40,29 @@ func NewDatabase(filename string) (Database, error) {
 		return nil, err
 	}
 
-	fstat, err := os.Stat(t.filename)
+	fileInfo, err := os.Stat(t.filename)
 	if err != nil {
-		return nil, fmt.Errorf("failed to stat file %s: %s", filename, err.Error())
+		return nil, fmt.Errorf("failed to stat file \"%s\": %s", filename, err.Error())
 	}
 
-	size := int(fstat.Size())
+	size := int(fileInfo.Size())
 	if size == 0 {
-		size = 1
+		size = t.pageSize
 	}
 
-	err = t.mmapFile(1)
+	err = t.mmapFile(size)
 	if err != nil {
 		return nil, err
+	}
+
+	// err = syscall.Madvise(t.data, syscall.MADV_SEQUENTIAL|syscall.MADV_WILLNEED)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	err = json.Unmarshal(t.data, &t.store)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load data from file \"%s\": %s", filename, err.Error())
 	}
 
 	return t, nil
@@ -63,25 +76,23 @@ func (t *table) openFile() error {
 
 	t.fd = int(file.Fd())
 	t.file = file
-	// defer t.file.Close()
 
 	return nil
 }
 
 func (t *table) mmapFile(size int) error {
-	data, err := syscall.Mmap(
+	var err error
+	t.data, err = syscall.Mmap(
 		t.fd,
 		0,
 		size,
-		syscall.PROT_WRITE|syscall.PROT_READ,
+		syscall.PROT_READ|syscall.PROT_WRITE,
 		syscall.MAP_SHARED,
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to mmap file %s: %s", t.filename, err.Error())
+		return fmt.Errorf("failed to mmap file \"%s\": %s", t.filename, err.Error())
 	}
-
-	t.data = data
 
 	return nil
 }
@@ -94,7 +105,7 @@ func (t *table) Get(key string) (string, error) {
 	val, ok = t.store[key]
 	t.mut.Unlock()
 	if !ok {
-		return "", fmt.Errorf("no value exists to get for key %s", key)
+		return "", fmt.Errorf("failed get for key \"%s\": no value", key)
 	}
 
 	return val, nil
@@ -115,7 +126,7 @@ func (t *table) Delete(key string) error {
 	t.mut.Lock()
 	if _, ok := t.store[key]; !ok {
 		t.mut.Unlock()
-		return fmt.Errorf("no value exists to delete for key %s", key)
+		return fmt.Errorf("failed to delete for key \"%s\": no value", key)
 	}
 
 	delete(t.store, key)
@@ -132,8 +143,11 @@ func (t *table) writeToFile() error {
 
 	size := len(data)
 	if len(t.data) < size {
-		log.Println("Resizing file")
-		t.file.Close()
+		err = t.file.Close()
+		if err != nil {
+			return fmt.Errorf("failed to close file for resizing: %s", err.Error())
+		}
+
 		t.openFile()
 
 		err := syscall.Ftruncate(t.fd, int64(size))
@@ -148,6 +162,20 @@ func (t *table) writeToFile() error {
 	}
 
 	copy(t.data, data)
+
+	return nil
+}
+
+func (t *table) Close() error {
+	err := t.file.Close()
+	if err != nil {
+		return fmt.Errorf("failed to close database file: %s", err.Error())
+	}
+
+	err = syscall.Munmap(t.data)
+	if err != nil {
+		return fmt.Errorf("failed to unmap memory: %s", err.Error())
+	}
 
 	return nil
 }

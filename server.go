@@ -74,6 +74,7 @@ func (serv *databaseServer) Listen() error {
 	serv.listener = server
 
 	defer serv.listener.Close()
+
 	log.Printf("Listening on port %d\n", serv.port)
 
 	serv.acceptConnections()
@@ -82,6 +83,10 @@ func (serv *databaseServer) Listen() error {
 }
 
 func (serv *databaseServer) Close() error {
+	if err := serv.database.Close(); err != nil {
+		return err
+	}
+
 	if err := serv.listener.Close(); err != nil {
 		return err
 	}
@@ -113,10 +118,7 @@ func (serv *databaseServer) handleConnection(c net.Conn) {
 		data := scanner.Text()
 
 		strData := strings.TrimSpace(string(data))
-		if strData == QUIT {
-			c.Write([]byte(string(CLOSING)))
-			break
-		} else if len(strData) == 0 {
+		if len(strData) == 0 {
 			continue
 		}
 
@@ -124,6 +126,12 @@ func (serv *databaseServer) handleConnection(c net.Conn) {
 		if err != nil {
 			writeMessage(c, err.Error())
 			continue
+		}
+
+		fmt.Printf("%v\n", instruction)
+		if instruction.operation == QUIT {
+			c.Write([]byte(string(CLOSING)))
+			break
 		}
 
 		result, err := serv.executeInstruction(instruction)
@@ -149,7 +157,7 @@ func (serv *databaseServer) executeInstruction(instruction *databaseServerInstru
 
 	log.Printf("operation: %s, key: %s, value: %s\n", instruction.operation, instruction.key, instruction.value)
 
-	switch strings.ToUpper(instruction.operation) {
+	switch instruction.operation {
 	case GET:
 		result, err = serv.database.Get(instruction.key)
 	case SET:
@@ -208,7 +216,7 @@ func parseInstruction(input string) (*databaseServerInstruction, error) {
 	}
 
 	return &databaseServerInstruction{
-		operation: operation,
+		operation: strings.ToUpper(operation),
 		key:       key,
 		value:     value,
 	}, nil
